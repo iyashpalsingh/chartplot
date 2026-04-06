@@ -1,0 +1,22 @@
+# Build folders
+build/
+*.o
+*.obj
+*.exe
+*.out
+*.app
+
+# Qt Creator files
+*.pro.user
+*.pro.user.*
+*.qbs.user
+*.qtc_clangd
+
+# CMake
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+
+# OS files
+.DS_Store
+Thumbs.db
