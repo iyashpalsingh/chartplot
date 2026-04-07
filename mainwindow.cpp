@@ -26,7 +26,7 @@ void LoadWorker::run()
     emit finished(reader.data(), ok, reader.lastError());
 }
 
-// ── MainWindow ────────────────────────────────────────────────────────────────
+// ── MainWindow constructor ────────────────────────────────────────────────────
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent), ui(new Ui::MainWindow)
 {
@@ -36,16 +36,29 @@ MainWindow::MainWindow(QWidget *parent)
     connect(ui->pushButton,   &QPushButton::clicked, this, &MainWindow::onLoadFile);
     connect(ui->pushButton_2, &QPushButton::clicked, this, &MainWindow::onPlotChart);
 
-    // Tab 2
-    connect(ui->btnPlot, &QPushButton::clicked, this, &MainWindow::onPlotTab2);
+    // Tab 2 — plot & scale buttons
+    connect(ui->btnPlot,       &QPushButton::clicked, this, &MainWindow::onPlotTab2);
+    connect(ui->btnApplyScale, &QPushButton::clicked, this, &MainWindow::onApplyScale);
+    connect(ui->btnAutoScale,  &QPushButton::clicked, this, &MainWindow::onAutoScale);
+    connect(ui->btnResetZoom,  &QPushButton::clicked, this, &MainWindow::onResetZoom);
 
     // Build checkbox groups
     buildCheckBoxGroup(ui->scrollVoltageContents,     s_voltageCols, m_voltageChecks);
     buildCheckBoxGroup(ui->scrollTemperatureContents, s_tempCols,    m_tempChecks);
     buildCheckBoxGroup(ui->scrollParameterContents,   s_paramCols,   m_paramChecks);
 
-    // Embed chart into chartContainer
+    // Embed chart
     m_chartManager = new ChartManager(ui->chartContainer, this);
+
+    // Chart -> spinboxes sync (when user zooms/pans)
+    connect(m_chartManager, &ChartManager::rangeChanged,
+            this, &MainWindow::onRangeChanged);
+
+    // Y-Right spinboxes disabled until dual axis is active
+    ui->spinYRMin->setEnabled(false);
+    ui->spinYRMax->setEnabled(false);
+    ui->lblYRMin->setEnabled(false);
+    ui->lblYRMax->setEnabled(false);
 }
 
 MainWindow::~MainWindow()
@@ -57,6 +70,7 @@ MainWindow::~MainWindow()
     delete ui;
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
 void MainWindow::buildCheckBoxGroup(QWidget *container,
                                     const QStringList &items,
                                     QMap<QString, QCheckBox*> &checkMap)
@@ -82,7 +96,40 @@ QStringList MainWindow::checkedItems(const QMap<QString, QCheckBox*> &map) const
     return result;
 }
 
-// ── SLOT: Load File ───────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// Populate spinboxes without triggering chart updates
+// ─────────────────────────────────────────────────────────────────────────────
+void MainWindow::setSpinBoxesFromRanges(AxisRange x, AxisRange yL, AxisRange yR)
+{
+    m_blockSpinSignals = true;
+
+    ui->spinXMin->setValue(x.min);
+    ui->spinXMax->setValue(x.max);
+    ui->spinYLMin->setValue(yL.min);
+    ui->spinYLMax->setValue(yL.max);
+    ui->spinYRMin->setValue(yR.min);
+    ui->spinYRMax->setValue(yR.max);
+
+    m_blockSpinSignals = false;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SLOT: chart range changed (zoom/pan) -> update spinboxes
+// ─────────────────────────────────────────────────────────────────────────────
+void MainWindow::onRangeChanged(AxisRange x, AxisRange yL, AxisRange yR)
+{
+    setSpinBoxesFromRanges(x, yL, yR);
+
+    bool dual = m_chartManager->hasDualAxis();
+    ui->spinYRMin->setEnabled(dual);
+    ui->spinYRMax->setEnabled(dual);
+    ui->lblYRMin->setEnabled(dual);
+    ui->lblYRMax->setEnabled(dual);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SLOT: Load File
+// ─────────────────────────────────────────────────────────────────────────────
 void MainWindow::onLoadFile()
 {
     QString path = QFileDialog::getOpenFileName(
@@ -99,17 +146,19 @@ void MainWindow::onLoadFile()
     m_worker = new LoadWorker(path);
     m_worker->moveToThread(m_thread);
 
-    connect(m_thread, &QThread::started,    m_worker, &LoadWorker::run);
-    connect(m_worker, &LoadWorker::progress, ui->progressBar, &QProgressBar::setValue);
-    connect(m_worker, &LoadWorker::finished, this,    &MainWindow::onLoadFinished);
-    connect(m_worker, &LoadWorker::finished, m_thread,&QThread::quit);
-    connect(m_thread, &QThread::finished,   m_worker, &QObject::deleteLater);
-    connect(m_thread, &QThread::finished,   m_thread, &QObject::deleteLater);
+    connect(m_thread, &QThread::started,     m_worker, &LoadWorker::run);
+    connect(m_worker, &LoadWorker::progress,  ui->progressBar, &QProgressBar::setValue);
+    connect(m_worker, &LoadWorker::finished,  this,    &MainWindow::onLoadFinished);
+    connect(m_worker, &LoadWorker::finished,  m_thread,&QThread::quit);
+    connect(m_thread, &QThread::finished,    m_worker, &QObject::deleteLater);
+    connect(m_thread, &QThread::finished,    m_thread, &QObject::deleteLater);
 
     m_thread->start();
 }
 
-// ── SLOT: Load finished ───────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// SLOT: Load finished
+// ─────────────────────────────────────────────────────────────────────────────
 void MainWindow::onLoadFinished(BatteryData data, bool ok, QString error)
 {
     ui->pushButton->setEnabled(true);
@@ -138,7 +187,6 @@ void MainWindow::onLoadFinished(BatteryData data, bool ok, QString error)
     ui->pushButton_2->setEnabled(true);
     ui->btnPlot->setEnabled(true);
 
-    // Show only checkboxes that exist in the file
     auto updateVisibility = [&](QMap<QString, QCheckBox*> &checkMap) {
         for (auto it = checkMap.begin(); it != checkMap.end(); ++it)
             it.value()->setVisible(data.hasColumn(it.key()));
@@ -148,7 +196,9 @@ void MainWindow::onLoadFinished(BatteryData data, bool ok, QString error)
     updateVisibility(m_paramChecks);
 }
 
-// ── SLOT: Plot Chart (Tab 1 button) ──────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// SLOT: Plot Chart (Tab 1)
+// ─────────────────────────────────────────────────────────────────────────────
 void MainWindow::onPlotChart()
 {
     if (!m_dataLoaded) return;
@@ -156,15 +206,15 @@ void MainWindow::onPlotChart()
     onPlotTab2();
 }
 
-// ── SLOT: Plot (Tab 2 button) ─────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// SLOT: Plot (Tab 2)
+// ─────────────────────────────────────────────────────────────────────────────
 void MainWindow::onPlotTab2()
 {
     if (!m_dataLoaded) {
         QMessageBox::information(this, "No Data", "Please load a file first (Tab 1).");
         return;
     }
-
-    QString xCol = ui->comboXAxis->currentText();
 
     QStringList yCols;
     yCols += checkedItems(m_voltageChecks);
@@ -177,5 +227,34 @@ void MainWindow::onPlotTab2()
         return;
     }
 
-    m_chartManager->plot(xCol, yCols, m_data);
+    m_chartManager->plot(ui->comboXAxis->currentText(), yCols, m_data);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SLOT: Apply Scale — read spinboxes, push to chart
+// ─────────────────────────────────────────────────────────────────────────────
+void MainWindow::onApplyScale()
+{
+    if (m_blockSpinSignals) return;
+
+    m_chartManager->setXRange (ui->spinXMin->value(),  ui->spinXMax->value());
+    m_chartManager->setYLRange(ui->spinYLMin->value(), ui->spinYLMax->value());
+    if (m_chartManager->hasDualAxis())
+        m_chartManager->setYRRange(ui->spinYRMin->value(), ui->spinYRMax->value());
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SLOT: Auto Scale — fit all data
+// ─────────────────────────────────────────────────────────────────────────────
+void MainWindow::onAutoScale()
+{
+    m_chartManager->autoScale();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SLOT: Reset Zoom
+// ─────────────────────────────────────────────────────────────────────────────
+void MainWindow::onResetZoom()
+{
+    m_chartManager->resetZoom();
 }
